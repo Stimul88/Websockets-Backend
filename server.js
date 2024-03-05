@@ -1,85 +1,86 @@
 const http = require('http');
 const Koa = require('koa');
-const koaBody = require('koa-body').default;
 const WS = require('ws');
-const chat = require('./db/dbChat')
-
-
+const dbChat = require('./db/dbChat')
+let dbUsers = require('./db/dbUsers')
 
 const app = new Koa();
 
-const router = require('./routes')
 
-app.use(koaBody({
-  urlencoded: true,
-  multipart: true,
-}));
-
-
-app.use(async (ctx, next) => {
-  const origin = ctx.request.get('Origin');
-  if (!origin) {
-    return await next();
-  }
-
-  const headers = {'Access-Control-Allow-Origin': '*',};
-
-  if (ctx.request.method !== 'OPTIONS') {
-    ctx.response.set({...headers});
-    try {
-      return await next();
-    } catch (e) {
-      e.headers = {...e.headers, ...headers};
-      throw e;
-    }
-  }
-
-  if (ctx.request.get('Access-Control-Request-Method')) {
-    ctx.response.set({
-      ...headers,
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH',
-    });
-
-    if (ctx.request.get('Access-Control-Request-Headers')) {
-      ctx.response.set('Access-Control-Allow-Headers', ctx.request.get('Access-Control-Request-Headers'));
-    }
-
-    ctx.response.status = 204;
-  }
-});
-
-app.use(router());
-
-const port = process.env.PORT || 8080;
+const port = process.env.PORT || 7070;
 const server = http.createServer(app.callback());
 
 const wsServer = new WS.Server({
-  server:server
+  server
 });
 
 wsServer.on('connection', (ws) => {
+  let clientNam = undefined;
+
   ws.on('message', (message) => {
 
-    const splitMessage = message.toString().split(' ')
-    const obj = {
-      name: splitMessage[0],
-      message: splitMessage[1]
+    const data = JSON.parse(message.toString())
+
+    const { user } = data;
+    const { chat } = data;
+
+
+    if(user) {
+
+      clientNam = user.name;
+
+      const nameData = dbUsers.find(name => name.name === user.name);
+      if (!nameData) {
+        dbUsers.push(user)
+
+
+        const eventData = JSON.stringify({user});
+
+        Array.from(wsServer.clients)
+          .filter(client => client.readyState === WS.OPEN)
+          .forEach(client => client.send(eventData));
+
+        return;
+      }
+      ws.send(JSON.stringify({"busy": "Никнейм занят! Необходимо выбрать другой!"}));
+      return;
     }
 
-    chat.push(obj);
 
-    const eventData = JSON.stringify({chat: [obj]})
-    console.log(eventData)
+    if(chat) {
+      dbChat.push(chat);
+
+      const eventData = JSON.stringify({chat});
+
+      Array.from(wsServer.clients)
+        .filter(client => client.readyState === WS.OPEN)
+        .forEach(client => client.send(eventData));
+    }
+  })
+
+
+
+  ws.on('close', () => {
+
+    const index = dbUsers.findIndex(el => el.name === clientNam);
+
+
+    dbUsers.splice(index, 1)
+
 
     Array.from(wsServer.clients)
       .filter(client => client.readyState === WS.OPEN)
-      .forEach(client => client.send(eventData))
+      .forEach(client => client.send(JSON.stringify({ dbUsers: dbUsers })));
 
-  })
-  ws.send(JSON.stringify({chat}));
+    clientNam = undefined;
+
+    console.log('close')
+  });
+
+  ws.send(JSON.stringify({ dbUsers: dbUsers }));
+  ws.send(JSON.stringify({ dbChat: dbChat }));
 
 });
-
 
 server.listen(port)
 
